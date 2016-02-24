@@ -1,0 +1,65 @@
+{
+  "name": "demo",
+  "version": "1.0",
+  "requirements": {
+	"bootstrap": ">2.0"
+  },
+  "pip_requirements": [
+  ],
+  "external_requirements": [
+  ],
+  "conflicts_with": {
+	"angular": "==*"
+  },
+  "config": "code.config.demo_args",
+  "pre_processor": [
+	"code.preproc.demo_preproc"
+  ],
+  "parser": null,
+  "linkers": [
+	"code.compile.demo_link"
+  ],
+  "tags": {
+	"c": "code.tags.C"
+  },
+  "substitutions": "code/subs.json",
+  "post_process": [],
+  "renderer": null,
+  "template": "template.html",
+  "static": [
+	"static/*",
+	"*.css",
+	"*.js",
+	"*.html"
+  ],
+  "styles": [
+	"style.css",
+	"//mycdn.rich/demo/coollook.css"
+  ],
+  "scripts": [
+	"script.js",
+    {
+   	  "local_path": "tjielp/*.js",
+      "copy": ["tjielp"]
+   	},
+	{
+	  "remote_path": "http://server.ext/tjielp/tweaks.js",
+      "allow_make_offline": false
+	},
+	{
+	  "local_path": "bla/hack.js",
+	  "copy": ["bla", "utils"],
+	  "remote_path": "https://server.ext/bla/hack.js"
+	},
+	{
+	  "remote_path": "https://server.ext/floep/stuff.js",
+	  "allow_make_offline": true,
+	  "download_archive": "https://otherserver.ext/floep/stuff-v1.zip",
+	  "copy": ["stuff-v1/dist"],
+	  "downloaded_path": "stuff-v1/dist/floep/stuff.js"
+	}
+  ],
+  "readme": "readme.rst",
+  "credits": "credits.txt",
+  "license": "Apache 2.0"
+}
