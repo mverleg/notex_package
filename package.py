@@ -84,7 +84,7 @@ class Package:
 				.format(self.name, self.version_request, ', '.join(versions)))  #todo: add note about installing?
 		self.version = choice
 		self.path = join(self.packages_dir, self.name, self.version)
-		print('chose version', choice, 'from', versions, 'because of', self.version_request)
+		# print('chose version', choice, 'from', versions, 'because of', self.version_request)
 
 	def load(self):
 		"""

@@ -33,26 +33,26 @@ class PackageList:
 		if chosen is None:
 			#todo: make a default?
 			raise NotImplementedError('None of the packages provides a template to use; {1:d} packages: {0:s}'
-				.format(', '.join(self.packages), len(self.packages)))
+				.format(', '.join('{0:}-{1:}'.format(pack.name, pack.version) for pack in self.packages), len(self.packages)))
 		return chosen.full_path
 
-	def _get_resources(self, attr_name, offline):
+	def _get_resources(self, attr_name, offline, minify=False):
 		resources = []
 		for package in self.packages:
 			self.logger.info('getting {0:s} for {1:s}'.format(attr_name, package.name), level=3)
 			for resource in getattr(package, attr_name, ()):
 				if offline:
 					resource.make_offline()
+				if minify:
+					resource.minify()
 				resources.append(resource)
 		return resources
 
-	def get_styles(self, offline=False):
-		return self._get_resources('styles', offline=offline)
+	def get_styles(self, offline=False, minify=False):
+		return self._get_resources('styles', offline=offline, minify=minify)
 
-	def get_scripts(self, offline=False):
-		return self._get_resources('scripts', offline=offline)
+	def get_scripts(self, offline=False, minify=False):
+		return self._get_resources('scripts', offline=offline, minify=minify)
 
-	def get_static(self, offline=False):
-		return self._get_resources('static', offline=offline)
-
-
+	def get_static(self, offline=False, minify=False):
+		return self._get_resources('static', offline=offline, minify=minify)

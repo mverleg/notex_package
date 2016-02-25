@@ -1,8 +1,11 @@
 
+from functools import partial
 from glob import glob
-from genericpath import isfile
+from css_html_js_minify import process_single_css_file, process_single_js_file
+from genericpath import isfile, getmtime
 from os import makedirs
 from os.path import join, exists, basename, splitext, abspath, relpath
+from re import findall
 from compiler.utils import hash_str, link_or_copy
 from notexp.utils import InvalidPackageConfigError
 from .utils import is_external
@@ -21,7 +24,7 @@ def get_resources(*, group_name, path, logger, cache, compile_conf, template_con
 	:param static_conf: Similar to style, but only included, not copied.
 	:return: template, styles, scripts, static
 	"""
-	def expand(res_info, cls):
+	def expand(res_info, cls, logger):
 		collected = []
 		for opts in res_info:
 			if not isinstance(opts, dict):
@@ -38,7 +41,7 @@ def get_resources(*, group_name, path, logger, cache, compile_conf, template_con
 						'("{1:s}"), since remote_path cannot have wildcards').format(
 							opts['local_path'], opts['path_path']))
 				if not expanded:
-					print('no match for "{0:}" (expected in "{1:s}")'.format(opts, full_paths))
+					logger.info('no match for "{0:}" (expected in "{1:s}")'.format(opts, full_paths), level=2)
 				del opts['local_path']
 				for pth in expanded:
 					collected.append(cls(logger=logger, cache=cache, compile_conf=compile_conf, group_name=group_name,
@@ -52,25 +55,28 @@ def get_resources(*, group_name, path, logger, cache, compile_conf, template_con
 	if template_conf:
 		template = HtmlResource(logger=logger, cache=cache, compile_conf=compile_conf, group_name=group_name,
 			resource_dir=path, local_path=template_conf, note=note)
-		assert isfile(template.full_path), 'template {0:s} does not exist'.format(template)
+		assert isfile(join(path, template.local_path)), \
+			'template {0:s} does not exist'.format(template.local_path)
 	if style_conf:
-		styles = expand(style_conf, cls=StyleResource)
+		styles = expand(style_conf, cls=StyleResource, logger=logger)
 		for resource in styles:
-			assert resource.exists, 'style {0:s} does not exist'.format(resource)
+			assert resource.exists, 'style {0:} does not exist'.format(resource)
 	if script_conf:
-		scripts = expand(script_conf, cls=ScriptResource)
+		scripts = expand(script_conf, cls=ScriptResource, logger=logger)
 		for resource in scripts:
-			assert resource.exists, 'scripts {0:s} does not exist'.format(resource)
+			assert resource.exists, 'scripts {0:} does not exist'.format(resource)
 	if static_conf:
-		static = expand(static_conf, cls=StaticResource)
+		static = expand(static_conf, cls=StaticResource, logger=logger)
 		for resource in static:
-			assert resource.exists, 'static {0:s} does not exist'.format(resource)
+			assert resource.exists, 'static {0:} does not exist'.format(resource)
 	return template, styles, scripts, static
 
 
+#todo: should this be in compiler or here? it's used by Package and Section
 class Resource:
 	def __init__(self, logger, cache, compile_conf, group_name, resource_dir=None, *, local_path=None, remote_path=None,
-			allow_make_offline=True, download_archive=None, downloaded_path=None, copy_map=None, note=None):
+			allow_make_offline=True, download_archive=None, downloaded_path=None, copy_map=None, allow_minify=True,
+			tag_type=None, note=None):
 		"""
 		There are basically three options:
 
@@ -87,12 +93,17 @@ class Resource:
 		:param allow_make_offline: If true (default), the resource can be downloaded and included in the compiled document.
 		:param download_archive: If set, when making an offline version, this archive (.zip) is downloaded and deflated rather than simply downloading remote_path.
 		:param downloaded_path: Determines the local path to link after downloading the archive.
-		:param copy_map: A mapping from original to final file paths for either local or archive data. Can be used to copy extra files or set the location of the main archive file. If set, the main file should be included.
+		:param copy_map: A mapping from original to final file paths for either local or archive data. Can be used to copy extra files or set the location of the main archive file.
+		:param allow_minify: Allow (not guarantee) automatic minifying of resources (should be False if already minified; True by default).
+		:param note: A simple text note that may be included.
 		"""
 		self.logger = logger
 		self.cache = cache
 		self.compile_conf = compile_conf
-		self.local_path = local_path
+		if local_path:
+			self.local_path, self.local_params = self.split_params(local_path)
+		else:
+			self.local_path, self.local_params = None, ''
 		self.remote_path = remote_path
 		self.allow_make_offline = allow_make_offline
 		self.download_archive = download_archive
@@ -103,6 +114,9 @@ class Resource:
 		self.group_name = group_name
 		if not self.local_path and not self.remote_path:
 			self.make_offline()
+		self.allow_minify = allow_minify
+		self.processed_path = None
+		self.tag_type = tag_type
 		self.notes = [note] if note else []  #['from package "{0:s}"'.format(self.package.name)]
 		assert local_path or remote_path or download_archive, ('{0:}: at least one of local_path, remote_path or '
 			'download_archive should be set').format(self)
@@ -148,40 +162,76 @@ class Resource:
 		else:
 			self._make_offline_from_file()
 
-	def _cut_params(self, pth):
-		return pth.split('?', maxsplit=1)[0].split('#', maxsplit=1)[0]
+	@staticmethod
+	def split_params(pth):
+		parts = findall(r'^([^?#]*)([?#].*)$', pth)
+		if not parts:
+			return pth, ''
+		return parts[0][0], parts[0][1]
 
 	def _make_offline_from_file(self):
 		self.logger.info(' making file available offline: {0:}'.format(self.remote_path), level=2)
 		prefix = hash_str('{0:s}.{1:s}'.format(self.group_name, self.remote_path))
-		self.local_path = '{0:.8s}_{1:s}'.format(prefix, basename(self._cut_params(self.remote_path)))
+		pth, self.local_params = self.split_params(self.remote_path)
+		self.local_path = '{0:.6s}{1:s}'.format(prefix, basename(pth))
 		link_or_copy(
 			src=self.cache.get_or_create_file(url=self.remote_path),
 			dst=join(self.resource_dir, self.local_path),
 			exist_ok=True,
 		)
-		self.notes.append('offline version based on external file "{0:s}"'.format(self.remote_path))
+		self.notes.append('downloaded from "{0:s}"'.format(self.remote_path))
 
 	def _make_offline_from_archive(self):
 		self.logger.info(' making archive available offline: {0:}'.format(self.download_archive), level=2)
 		prefix = hash_str('{0:s}.{1:s}'.format(self.group_name, self.download_archive))
-		self.archive_dir = '{0:.8s}_{1:s}'.format(prefix, splitext(basename(self._cut_params(self.download_archive)))[0])
+		self.archive_dir = '{0:.8s}_{1:s}'.format(prefix,
+			splitext(basename(self.split_params(self.download_archive)[0]))[0])
 		archive = self.cache.get_or_create_file(url=self.download_archive)
 		dir = self.cache.get_or_create_file(rzip=archive)
 		link_or_copy(dir, join(self.resource_dir, self.archive_dir), exist_ok=True)
-		self.local_path = join(self.downloaded_path)
+		self.local_path, self.local_params = self.split_params(self.downloaded_path)
+
+	def minify(self):
+		"""
+		Subclasses can override this to minify file(s) (not gzip, just remove parts).
+		Should be used after make_offline, since it can only minify local files.
+		"""
+		if not self.allow_minify:
+			return
+		self.notes = []
+
+	@property
+	def full_file_path(self):
+		"""
+		Full path to where the local file, if set, can be loaded (so no GET parameters etc).
+		"""
+		if self.local_path:
+			return join(self.resource_dir, self.archive_dir or '', self.local_path)
+		return None
 
 	@property
 	def full_path(self):
+		"""
+		Full path including parameters to the local or remote file.
+		"""
 		if self.local_path:
-			return join(self.resource_dir, self.local_path)
+			return self.full_file_path + self.local_params
+		return self.remote_path
+
+	@property
+	def relative_path(self):
+		"""
+		Path relative to the document, including parameters.
+		"""
+		if self.local_path:
+			return self.local_path + self.local_params
 		return self.remote_path
 
 	@property
 	def exists(self):
 		if self.remote_path:
 			return True
-		return exists(self.full_path)
+		return exists(self.full_file_path)
 
 	@property
 	def html(self):
@@ -193,20 +243,48 @@ class Resource:
 		"""
 		self.logger.info(' {0:} {2:} for {1:s}'.format(self.__class__.__name__,
 			self.group_name, id(self) % 100000), level=3)
-		if self.local_path:
-			# print('&&', dirname(join(to, self.local_path)))
-			if not self.copy_map:
-				self.copy_map = {self._cut_params(self.local_path): self._cut_params(self.local_path)}
-			for src, dst in self.copy_map.items():
+		if self.local_path is None:
+			return
+		if self.processed_path is None:
+			self.processed_path = self.full_file_path
+		if self.copy_map:
+			allow_symlink = False  # this may be too aggressive
+		else:
+			self.copy_map = {None: self.local_path}
+		for src, dst in self.copy_map.items():
+			if src:
 				assert '*' not in src, '{0:}: wildcards not allowed in copy_map'.format(self)
 				assert self.resource_dir is not None, 'local resources should have resource_dir specified'
 				srcpth = join(self.resource_dir, self.archive_dir or '', src)
-				dstpth = join(to, dst)
-				if self.logger.get_level() >= 3:
-					self.logger.info('  copying {0:s} {1:s} -> {2:}'.format(self.__class__.__name__, srcpth, dstpth), level=3)
-				else:
-					self.logger.info(' copying {0:s} {1:}'.format(self.__class__.__name__, dstpth), level=2)
-				link_or_copy(src=srcpth, dst=dstpth, follow_symlinks=True, allow_linking=allow_symlink, create_dirs=True)
+			else:
+				srcpth = self.processed_path
+			dstpth = join(to, dst)
+			if self.logger.get_level() >= 3:
+				self.logger.info('  copying {0:s} {1:s} -> {2:}'.format(self.__class__.__name__, srcpth, dstpth), level=3)
+			else:
+				self.logger.info(' copying {0:s} {1:}'.format(self.__class__.__name__, dstpth), level=2)
+			if exists(dstpth) and getmtime(dstpth) >= getmtime(srcpth):
+				self.logger.info('  {0:s} {1:s} seems unchanged'.format(self.__class__.__name__, dstpth), level=3)
+			else:
+				link_or_copy(src=srcpth, dst=dstpth, follow_symlinks=True, allow_linking=allow_symlink, create_dirs=True, exist_ok=True)
+
+	def _do_process(self, func, name='res_proc'):
+		if not self.allow_minify:
+			return
+		self.notes = []
+		if self.local_path is None:
+			return
+		if self.processed_path is None:
+			self.processed_path = self.full_file_path
+		src = self.processed_path
+		makedirs(self.resource_dir, exist_ok=True, mode=0o700)
+		self.processed_path = join(self.compile_conf.TMP_DIR, name, self.group_name, self.local_path)
+		if self.logger.get_level() >= 3:
+			self.logger.info('  processing {0:s} {1:s} -> {2:}'.format(self.__class__.__name__, src, self.processed_path), level=3)
+		else:
+			self.logger.info(' processing {0:s} {1:}'.format(self.__class__.__name__, self.processed_path), level=2)
+		link_or_copy(src=self.cache.get_or_create_file(func=partial(func, src), dependencies=(src,)),
+			dst=self.processed_path, exist_ok=False, allow_overwrite=True)
 
 
 class HtmlResource(Resource):
@@ -216,17 +294,27 @@ class HtmlResource(Resource):
 class StyleResource(Resource):
 	@property
 	def html(self):
-		print('style', self.local_path, self.remote_path)
-		return '<link href="{0:s}" rel="stylesheet" type="text/css" > <!-- {1:s} -->'.format(
-			self.local_path or self.remote_path, '; '.join(self.notes))
+		tag_type = self.tag_type or 'text/css'
+		return '<link href="{0:s}" rel="stylesheet" type="{1:s}" >'.format(self.relative_path, tag_type) + \
+			(' <!-- {0:s} -->'.format('; '.join(self.notes)) if self.notes else '')
+
+	def minify(self):
+		def min_css(inpath, outpath):
+			process_single_css_file(css_file_path=inpath, output_path=outpath, overwrite=False)
+		return self._do_process(min_css, 'minify')
 
 
 class ScriptResource(Resource):
 	@property
 	def html(self):
-		print('script', self.local_path, self.remote_path)
-		return '<script src="{0:s}" type="text/javascript"></script> <!-- {1:s} -->'.format(
-			self.local_path or self.remote_path, '; '.join(self.notes))
+		tag_type = self.tag_type or 'text/javascript'
+		return '<script src="{0:s}" type="{1:s}"></script>'.format(self.relative_path, tag_type) + \
+			(' <!-- {0:s} -->'.format('; '.join(self.notes)) if self.notes else '')
+
+	def minify(self):
+		def min_js(inpath, outpath):
+			process_single_js_file(js_file_path=inpath, output_path=outpath, overwrite=False)
+		return self._do_process(min_js, 'minify')
 
 
 class StaticResource(Resource):
