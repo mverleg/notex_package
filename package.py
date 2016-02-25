@@ -1,25 +1,17 @@
 
 from datetime import datetime
-from glob import glob
 from sys import stderr
-from json_tricks.nonp import load
 from collections import OrderedDict
 from copy import copy
+from json_tricks.nonp import load
 from os import listdir, walk
-from os.path import join, relpath, isfile, abspath
+from os.path import join, relpath
 from package_versions import VersionRange, VersionRangeMismatch
 from compiler.utils import hash_str, hash_file
-from .utils import PackageError, get_package_dir, is_external
+from notexp.utils import PackageNotInstalledError, InvalidPackageConfigError
 from .license import LICENSES
-from .resource import HtmlResource, StyleResource, ScriptResource, StaticResource
-
-
-class PackageNotInstalledError(PackageError):
-	pass
-
-
-class InvalidPackageConfigError(PackageError):
-	pass
+from .resource import get_resources
+from .utils import get_package_dir
 
 
 CONFIG_REQUIRED = {'name', 'version', 'license',}
@@ -120,46 +112,11 @@ class Package:
 		"""
 		Load non-python files: template, styles, scripts and static files.
 		"""
-		def expand(resinfo, cls):
-			collected = []
-			for opts in resinfo:
-				if not isinstance(opts, dict):
-					if is_external(opts):
-						opts = dict(remote_path=opts)
-					else:
-						opts = dict(local_path=opts)
-				if 'local_path' in opts:
-					full_paths = abspath(join(self.path, opts['local_path']))
-					#todo: recursive glob requires python 3.5 (and use ** for recursion)
-					expanded = tuple(relpath(pth, self.path) for pth in glob(full_paths))
-					if 'remote_path' in opts and '*' in opts['local_path']:
-						raise AssertionError(('wildcard in local_path "{0:s}" not allowed if remote_path is set '
-							'("{1:s}"), since remote_path cannot have wildcards').format(
-								opts['local_path'], opts['path_path']))
-					if not expanded:
-						print('no match for "{0:s}" (expected in "{1:s}")'.format(opts, full_paths))
-					del opts['local_path']
-					for pth in expanded:
-						collected.append(cls(package=self, logger=self.logger, cache=self.cache,
-							compile_conf=self.compile_conf, local_path=pth, **opts))
-				else:
-					collected.append(cls(package=self, logger=self.logger, cache=self.cache,
-						compile_conf=self.compile_conf, **opts))
-			return collected
-		self.template = None
-		if conf['template']:
-			self.template = HtmlResource(package=self, logger=self.logger, cache=self.cache,
-				compile_conf=self.compile_conf, local_path=conf['template'])
-			assert isfile(self.template.full_path), 'template {0:s} does not exist'.format(self.template)
-		self.styles = expand(conf['styles'], cls=StyleResource)
-		for resource in self.styles:
-			assert resource.exists, 'style {0:s} does not exist'.format(resource)
-		self.scripts = expand(conf['scripts'], cls=ScriptResource)
-		for resource in self.scripts:
-			assert resource.exists, 'scripts {0:s} does not exist'.format(resource)
-		self.static = expand(conf['static'], cls=StaticResource)
-		for resource in self.static:
-			assert resource.exists, 'static {0:s} does not exist'.format(resource)
+		self.template, self.styles, self.scripts, self.static = get_resources(group_name=self.name, path=self.path,
+			logger=self.logger, cache=self.cache, compile_conf=self.compile_conf, template_conf=conf['template'],
+			style_conf=conf['styles'], script_conf=conf['scripts'], static_conf=conf['static'],
+			note='from package {0:s}'.format(self.name)
+		)
 
 	def load_meta(self,  conf):
 		"""

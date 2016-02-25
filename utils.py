@@ -10,6 +10,14 @@ class PackageError(Exception):
 	pass
 
 
+class PackageNotInstalledError(PackageError):
+	pass
+
+
+class InvalidPackageConfigError(PackageError):
+	pass
+
+
 PACKAGE_NAME_INFO = 'Package names can consist of between 3 and 32 alphanumeric characters, starting with a letter.' + \
 	' They are case-insensitive and can contain "-_.," (not in sequence) which are all treated as "_".'
 
@@ -58,5 +66,4 @@ def get_package_dir():
 # 		urlretrieve(frm, cache_pth)
 # 		cache.set('{0:s}_lastmod'.format(name), datetime.now())
 # 	link_or_copy(cache_pth, to, exist_ok=True)
-
 
