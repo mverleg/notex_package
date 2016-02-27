@@ -51,6 +51,7 @@ def get_package_dir():
 		makedirs(defpath)
 	return defpath
 
+
 #
 # curl_cache_dir = join(gettempdir(), 'notex_curl_cache')  # todo: to settings
 # makedirs(curl_cache_dir, exist_ok=True, mode=0o700)

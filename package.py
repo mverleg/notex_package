@@ -1,13 +1,14 @@
 
 from datetime import datetime
-from sys import stderr
 from collections import OrderedDict
 from copy import copy
+from sys import stderr
 from json_tricks.nonp import load
-from os import listdir, walk
-from os.path import join, relpath
+from os import listdir, walk, remove
+from os.path import join, relpath, exists
 from package_versions import VersionRange, VersionRangeMismatch
-from compiler.utils import hash_str, hash_file
+from shutil import rmtree
+from compiler.utils import hash_str, hash_file, import_obj, link_or_copy
 from notexp.utils import PackageNotInstalledError, InvalidPackageConfigError
 from .license import LICENSES
 from .resource import get_resources
@@ -23,12 +24,13 @@ CONFIG_DEFAULTS = {
 	'external_requirements': [],
 	'conflicts_with': {},
 	'command_arguments': [],
-	'pre_processor': [],
+	'pre_processors': [],
 	'parser': None,
-	'linkers': [],
 	'tags': {},
+	'compilers': [],
+	'linkers': [],
 	'substitutions': None,
-	'post_process': [],
+	'post_processors': [],
 	'renderer': None,
 	'template': None,
 	'static': [],
@@ -39,8 +41,8 @@ CONFIG_DEFAULTS = {
 }
 
 
-CONFIG_FUNCTIONAL = {'command_arguments', 'pre_processor', 'parser', 'linkers', 'tags', 'substitutions',
-	'post_process', 'renderer', 'template', 'static', 'styles', 'scripts',}
+CONFIG_FUNCTIONAL = {'command_arguments', 'pre_processors', 'parser', 'tags', 'compilers', 'linkers', 'substitutions',
+	'post_processors', 'renderer', 'template', 'static', 'styles', 'scripts',}
 
 
 class Package:
@@ -59,6 +61,11 @@ class Package:
 		self.version_request = version
 		self.path = self.version = None
 		self.choose_version()
+		# initialize actions
+		self.Parser = self.Renderer = None
+		self.pre_processors = self.compilers = self.linkers = self.post_processors = ()
+		self.tags = OrderedDict()
+		self.substitutions = OrderedDict()
 
 	def __repr__(self):
 		return '<{0:}.{1:s}: {2:s} {3:s}>'.format(self.__class__.__module__, self.__class__.__name__, self.name,
@@ -90,6 +97,7 @@ class Package:
 		"""
 		Loading should not be automatic because it should also work for untrusted packages (e.g. to get the signature).
 		"""
+		# link_or_copy(self.path, join(self.compile_conf.PACKAGE_DIR, self.name))
 		try:
 			with open(join(self.path, 'config.json')) as fh:
 				conf = load(fh)
@@ -105,6 +113,7 @@ class Package:
 		conf = self.config_add_defaults(conf)
 		self.config_load_textfiles(conf)
 		self.load_resources(conf)
+		self.load_actions(conf)
 		self.loaded = True
 		return self
 
@@ -128,6 +137,60 @@ class Package:
 		self.is_approved = True
 		self.approved_on = datetime.now()  # todo (None if not approved)
 
+	def _set_up_import_dir(self):
+		imp_dir = join(self.compile_conf.PACKAGE_DIR, self.name)
+		if exists(imp_dir):
+			try:
+				with open(join(self.compile_conf.PACKAGE_DIR, '{0:s}.version'.format(self.name)), 'r') as fh:
+					stored_version = fh.read()
+			except IOError:
+				stored_version = None
+			if self.version != stored_version:
+				self.logger.info('removing wrong version {2:} of package {0:s} from "{1:s}"'.format(self.name,
+					imp_dir, stored_version), level=3)
+				try:
+					remove(imp_dir)
+				except IsADirectoryError:
+					rmtree(imp_dir)
+		if not exists(imp_dir):
+			self.logger.info('copy package {0:} to "{1:}"'.format(self.name, imp_dir), level=3)
+			link_or_copy(self.path, join(self.compile_conf.PACKAGE_DIR, self.name), exist_ok=True, allow_linking=True)
+			with open(join(self.compile_conf.PACKAGE_DIR, '{0:s}.version'.format(self.name)), 'w+') as fh:
+				fh.write(self.version)
+
+	def _import_from_package(self, imp_path):
+		"""
+		First try to import from the package, otherwise fall back to normal pythonpath.
+		"""
+		try:
+			return import_obj('{0:s}.{1:s}'.format(self.name, imp_path))
+		except ImportError:
+			return import_obj(imp_path)
+
+	def load_actions(self, conf):
+		"""
+		Load actions like pretty much everything: pre-processors, parsers, tags, compilers, linkers, substitutions,
+		post_processors and renderers).
+		"""
+		#todo: better errors, also logging
+		self._set_up_import_dir()
+		self.pre_processors = tuple(self._import_from_package(obj_imp_path) for obj_imp_path in conf['pre_processors'])
+		if conf['parser']:
+			self.Parser = self._import_from_package(conf['parser'])
+		# cache tags which are known under two names, for performance and so that they are identical
+		_tag_alias_cache = {}
+		for name, obj_imp_path in conf['tags'].items():
+			if name not in _tag_alias_cache:
+				_tag_alias_cache[name] = self._import_from_package(obj_imp_path)
+			self.tags[name] = _tag_alias_cache[name]
+		self.compilers = tuple(self._import_from_package(obj_imp_path) for obj_imp_path in conf['compilers'])
+		self.linkers = tuple(self._import_from_package(obj_imp_path) for obj_imp_path in conf['linkers'])
+		if conf['substitutions']:  #todo (maybe)
+			raise NotImplementedError('substitutions')
+		self.post_processors = tuple(self._import_from_package(obj_imp_path) for obj_imp_path in conf['post_processors'])
+		if conf['renderer']:
+			self.Renderer = self._import_from_package(conf['renderer'])
+
 	def config_add_defaults(self, config):
 		"""
 		Add default values for all parameters that have defaults, check that all parameters
@@ -145,7 +208,6 @@ class Package:
 		conf.update(config)
 		for func_key in CONFIG_FUNCTIONAL:
 			if conf[func_key]:
-				# print('  ',func_key)
 				break
 		else:
 			raise NotImplementedError('{0:} does not have any functionality ({1:s} are all empty)'.format(
@@ -193,5 +255,9 @@ class Package:
 		#on installing, not all the time
 		#todo make sure all filenames are boring: alphanumeric or -_. or space(?)
 		pass
+
+	# def yield_compilers(self):
+	# 	for compiler in self.compilers:
+	# 		yield compiler
 
 
