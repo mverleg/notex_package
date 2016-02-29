@@ -1,5 +1,5 @@
-from lxml_pr.parser import LXML_Parser
 
+from notex_pkgs.lxml_pr.parser import LXML_Parser
 from notex_pkgs.lxml_pr.renderer import LXML_Renderer
 from notexp.resource import Resource
 from .package import Package
@@ -28,7 +28,7 @@ class PackageList:
 	def _get_single(self, attr_name, fallback=None):
 		chosen = None
 		for package in self.packages:
-			self.logger.info('getting {1:s} for {0:s}'.format(package.name, attr_name), level=3)
+			self.logger.info('  getting {1:s} for {0:s}'.format(package.name, attr_name), level=3)
 			if getattr(package, attr_name) is not None:
 				if 'verbosity' and chosen is not None:
 					self.logger.info('{2:s} {0:s} overridden by {1:}'.format(
@@ -74,7 +74,7 @@ class PackageList:
 
 	def _yield_resources(self, attr_name, offline, minify=False):
 		for package in self.packages:
-			self.logger.info('getting {0:s} for {1:s}'.format(attr_name, package.name), level=3)
+			self.logger.info('  getting {0:s} for {1:s}'.format(attr_name, package.name), level=4)
 			for resource in getattr(package, attr_name, ()):
 				if offline:
 					resource.make_offline()
@@ -93,6 +93,7 @@ class PackageList:
 
 	def _yield_series(self, attr_name):
 		for package in self.packages:
+			self.logger.info('  getting {0:s} for {1:s}'.format(attr_name, package.name), level=4)
 			for item in getattr(package, attr_name):
 				yield item
 
