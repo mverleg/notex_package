@@ -100,6 +100,22 @@ class Resource:
 		self.logger = logger
 		self.cache = cache
 		self.compile_conf = compile_conf
+
+		assert local_path or remote_path or download_archive, ('{0:}: at least one of local_path, remote_path or '
+			'download_archive should be set').format(self)
+		if local_path:
+			assert not download_archive and not downloaded_path, ('{0:}: if a local path is given, download_archive '
+				'and downloaded_path should be empty').format(self)
+		if download_archive:
+			assert allow_make_offline, ('making an offline version of resource {0:} should be allowed '
+				'if download_archive is set').format(self)
+		if local_path:
+			assert not download_archive and not downloaded_path, ('since local_path is set for resource {0:}, '
+				'download_archive and downloaded_path are redundant options and should not be set').format(self)
+		if downloaded_path:
+			assert download_archive, ('{0:}: downloaded_path should only be set if '
+				'download_archive is set').format(self)
+
 		if local_path:
 			self.local_path, self.local_params = self.split_params(local_path)
 		else:
@@ -118,20 +134,6 @@ class Resource:
 		self.processed_path = None
 		self.tag_type = tag_type
 		self.notes = [note] if note else []  #['from package "{0:s}"'.format(self.package.name)]
-		assert local_path or remote_path or download_archive, ('{0:}: at least one of local_path, remote_path or '
-			'download_archive should be set').format(self)
-		if local_path:
-			assert not download_archive and not downloaded_path, ('{0:}: if a local path is given, download_archive '
-				'and downloaded_path should be empty').format(self)
-		if download_archive:
-			assert allow_make_offline, ('making an offline version of resource {0:} should be allowed '
-				'if download_archive is set').format(self)
-		if local_path:
-			assert not download_archive and not downloaded_path, ('since local_path is set for resource {0:}, '
-				'download_archive and downloaded_path are redundant options and should not be set').format(self)
-		if downloaded_path:
-			assert download_archive, ('{0:}: downloaded_path should only be set if '
-				'download_archive is set').format(self)
 		# assert hasattr(local_copy, '__iter__') and not isinstance(local_copy, str), \
 		# 	'{0:}: local_copy should be a list'.format(self)
 		# assert hasattr(downloaded_copy, '__iter__') and not isinstance(downloaded_copy, str), \
@@ -159,8 +161,10 @@ class Resource:
 		makedirs(self.resource_dir, exist_ok=True, mode=0o700)
 		if self.download_archive:
 			self._make_offline_from_archive()
-		else:
+		elif self.remote_path:
 			self._make_offline_from_file()
+		else:
+			raise AssertionError('no resource found for {0:}'.format(self))
 
 	@staticmethod
 	def split_params(pth):

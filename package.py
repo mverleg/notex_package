@@ -1,5 +1,6 @@
 
 from datetime import datetime
+from inspect import isclass
 from collections import OrderedDict
 from copy import copy
 from sys import stderr
@@ -9,6 +10,7 @@ from os.path import join, relpath, exists
 from package_versions import VersionRange, VersionRangeMismatch
 from shutil import rmtree
 from compiler.utils import hash_str, hash_file, import_obj, link_or_copy
+from notexp.bases import Configuration
 from notexp.utils import PackageNotInstalledError, InvalidPackageConfigError
 from .license import LICENSES
 from .resource import get_resources
@@ -23,7 +25,8 @@ CONFIG_DEFAULTS = {
 	'pip_requirements': [],
 	'external_requirements': [],
 	'conflicts_with': {},
-	'command_arguments': [],
+	'command_arguments': [],  # todo: possibly merge with config (not all commands are config though)
+	'config': None,
 	'pre_processors': [],
 	'parser': None,
 	'tags': {},
@@ -62,7 +65,7 @@ class Package:
 		self.path = self.version = None
 		self.choose_version()
 		# initialize actions
-		self.Parser = self.Renderer = None
+		self.config = self.parser = self.renderer = None
 		self.pre_processors = self.compilers = self.linkers = self.post_processors = ()
 		self.tags = OrderedDict()
 		self.substitutions = OrderedDict()
@@ -172,24 +175,51 @@ class Package:
 		Load actions like pretty much everything: pre-processors, parsers, tags, compilers, linkers, substitutions,
 		post_processors and renderers).
 		"""
+		def instantiate_action(action, **kwargs):
+			if isclass(action):
+				try:
+					action = action(self.config, **kwargs)
+				except TypeError as err:
+					raise InvalidPackageConfigError(('action {0:} for package {1:} did not accept the given arguments: '
+						'config and kwargs {2:}; alternatively it might have raised a TypeError {3:}')
+						.format(action, self, kwargs, err))
+			if not hasattr(action, '__call__'):
+				raise InvalidPackageConfigError(('action {0:} for package {1:} should be a class (and/)or a callable')
+					.format(action, self, kwargs))
+
+			return action
+
 		#todo: better errors, also logging
 		self._set_up_import_dir()
-		self.pre_processors = tuple(self._import_from_package(obj_imp_path) for obj_imp_path in conf['pre_processors'])
+		if conf['config']:
+			Config = self._import_from_package(conf['config'])
+			if Config is None:
+				Config = Configuration
+			self.config = Config(self.options)
+		self.pre_processors = tuple(instantiate_action(self._import_from_package(obj_imp_path))
+			for obj_imp_path in conf['pre_processors'])
 		if conf['parser']:
-			self.Parser = self._import_from_package(conf['parser'])
+			Parser = self._import_from_package(conf['parser'])
+			self.parser = Parser(self.config)
 		# cache tags which are known under two names, for performance and so that they are identical
 		_tag_alias_cache = {}
 		for name, obj_imp_path in conf['tags'].items():
-			if name not in _tag_alias_cache:
-				_tag_alias_cache[name] = self._import_from_package(obj_imp_path)
-			self.tags[name] = _tag_alias_cache[name]
-		self.compilers = tuple(self._import_from_package(obj_imp_path) for obj_imp_path in conf['compilers'])
-		self.linkers = tuple(self._import_from_package(obj_imp_path) for obj_imp_path in conf['linkers'])
+			if obj_imp_path not in _tag_alias_cache:
+				_tag_alias_cache[obj_imp_path] = instantiate_action(
+					self._import_from_package(obj_imp_path))
+			self.tags[name] = _tag_alias_cache[obj_imp_path]
+		self.compilers = tuple(instantiate_action(self._import_from_package(obj_imp_path))
+			for obj_imp_path in conf['compilers'])
+		self.linkers = tuple(instantiate_action(self._import_from_package(obj_imp_path))
+			for obj_imp_path in conf['linkers'])
 		if conf['substitutions']:  #todo (maybe)
 			raise NotImplementedError('substitutions')
-		self.post_processors = tuple(self._import_from_package(obj_imp_path) for obj_imp_path in conf['post_processors'])
+		self.post_processors = tuple(instantiate_action(self._import_from_package(obj_imp_path))
+			for obj_imp_path in conf['post_processors'])
 		if conf['renderer']:
-			self.Renderer = self._import_from_package(conf['renderer'])
+			Renderer = self._import_from_package(conf['renderer'])
+			self.renderer = Renderer(self.config)
+
 
 	def config_add_defaults(self, config):
 		"""
@@ -210,7 +240,7 @@ class Package:
 			if conf[func_key]:
 				break
 		else:
-			raise NotImplementedError('{0:} does not have any functionality ({1:s} are all empty)'.format(
+			raise InvalidPackageConfigError('{0:} does not have any functionality ({1:s} are all empty)'.format(
 				self, ', '.join(CONFIG_FUNCTIONAL))) #todo
 			logger.strict_fail('{0:} does not have any functionality ({1:s} are all empty)'.format(
 				self, ', '.join(CONFIG_FUNCTIONAL)))
