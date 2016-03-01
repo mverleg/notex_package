@@ -14,8 +14,9 @@ class Configuration:
 
 
 class TagHandler:
-	can_contain_tags = False
-	can_use_substitutions = True
+	can_contain_tags = False  # tags within this one will also be handled
+	can_use_substitutions = True  # substitutions are applies to children of this tag
+	final_handler = False  # block other handlers registered for the same tag
 
 	def __init__(self, config):
 		self.config = config

@@ -1,4 +1,5 @@
 
+from collections import defaultdict
 from notex_pkgs.lxml_pr.parser import LXML_Parser
 from notex_pkgs.lxml_pr.renderer import LXML_Renderer
 from notexp.resource import Resource
@@ -30,15 +31,15 @@ class PackageList:
 		for package in self.packages:
 			self.logger.info('  getting {1:s} for {0:s}'.format(package.name, attr_name), level=3)
 			if getattr(package, attr_name) is not None:
-				if 'verbosity' and chosen is not None:
+				if chosen is not None:
 					self.logger.info('{2:s} {0:s} overridden by {1:}'.format(
 						chosen.template, getattr(package, attr_name), attr_name), level=2)
 				chosen = getattr(package, attr_name)
-			if chosen is None:
-				chosen = fallback
-				self.logger.info('no package provided {1:s}; falling back to the default {0:}'.format(
-					chosen, attr_name), level=2)
-			return chosen
+		if chosen is None:
+			chosen = fallback
+			self.logger.info('no package provided {1:s}; falling back to the default {0:}'.format(
+				chosen, attr_name), level=2)
+		return chosen
 
 	def get_parser(self):
 		return self._get_single('parser', LXML_Parser(None))
@@ -79,11 +80,20 @@ class PackageList:
 	def yield_pre_processors(self):
 		return self._yield_series('pre_processors')
 
-	def yield_tags(self):
+	def get_tags(self):
+		tags = {}
 		for package in self.packages:
-			for tag_name, Cls in package.tags.items():
-				yield tag_name, Cls
-				yield '{0:}-{1:s}'.format(package.name, tag_name), Cls
+			for base_name, tag in package.tags.items():
+				for tag_name in (base_name, '{0:s}-{1:s}'.format(package.name, base_name)):
+					if tag_name in tags:
+						if getattr(tags[tag_name][-1], 'final_handler', False):
+							self.logger(('  tag handler {0:} for {1:} not registered because final_handler tag {2:} was '
+								'registered before').format(tag, tag_name, tags[tag_name][-1]), level=2)
+						else:
+							tags[tag_name].append(tag)
+					else:
+						tags[tag_name] = [tag]
+		return tags
 
 	def yield_compilers(self):
 		return self._yield_series('compilers')
