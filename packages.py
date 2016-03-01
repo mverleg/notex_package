@@ -50,27 +50,6 @@ class PackageList:
 		fallback = Resource(logger=self.logger, cache=self.cache, compile_conf=self.compile_conf,
 			group_name='fallback', resource_dir=self.compile_conf.code_dir, local_path='fallback_template.html')
 		return self._get_single('template', fallback)
-		# if template is None:
-		# 	raise NotImplementedError('None of the packages provides a template to use; {1:d} packages: {0:s}'
-		# 		.format(', '.join('{0:}-{1:}'.format(pack.name, pack.version) for pack in self.packages), len(self.packages)))
-
-	#
-	# #todo: cache (others too)
-	# def get_template(self):
-	# 	chosen = None
-	# 	for package in self.packages:
-	# 		self.logger.info('getting template for {0:s}'.format(package.name), level=3)
-	# 		# print('searching template in {0:}'.format(package))
-	# 		if package.template is not None:
-	# 			if 'verbosity' and chosen is not None:  #todo
-	# 				self.logger.info('template {0:s} overridden by {1:s}'.format(chosen.template, package.template),
-	# 					 level=2)
-	# 			chosen = package.template
-	# 	if chosen is None:
-	# 		#todo: make a default?
-	# 		raise NotImplementedError('None of the packages provides a template to use; {1:d} packages: {0:s}'
-	# 			.format(', '.join('{0:}-{1:}'.format(pack.name, pack.version) for pack in self.packages), len(self.packages)))
-	# 	return chosen.full_path
 
 	def _yield_resources(self, attr_name, offline, minify=False):
 		for package in self.packages:
