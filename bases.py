@@ -3,8 +3,12 @@ from copy import copy
 
 
 class Configuration:
-	def __init__(self, options):
+	def __init__(self, options, *, logger, cache, compile_conf, parser):
 		self.options = copy(options)
+		self.logger = logger
+		self.cache = cache
+		self.compile_conf = compile_conf
+		self.parser = parser
 
 	def add_cmd_args(self):
 		pass

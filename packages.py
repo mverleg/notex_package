@@ -1,5 +1,4 @@
 
-from collections import defaultdict
 from notex_pkgs.lxml_pr.parser import LXML_Parser
 from notex_pkgs.lxml_pr.renderer import LXML_Renderer
 from notexp.resource import Resource
@@ -11,6 +10,7 @@ class PackageList:
 	An ordered collection of packages.
 	"""
 	def __init__(self, packages, logger, cache, compile_conf, document_conf):
+		#todo: PackageList gets document_conf but individual packages do not
 		self.packages = []
 		self.logger = logger
 		self.cache = cache
@@ -48,8 +48,8 @@ class PackageList:
 		return self._get_single('renderer', LXML_Renderer(None))
 
 	def get_template(self):
-		fallback = Resource(logger=self.logger, cache=self.cache, compile_conf=self.compile_conf,
-			group_name='fallback', resource_dir=self.compile_conf.code_dir, local_path='fallback_template.html')
+		fallback = Resource(logger=self.logger, cache=self.cache, compile_conf=self.compile_conf, group_name='fallback',
+		                    resource_dir=self.compile_conf.code_dir, local_path='fallback_template.html')
 		return self._get_single('template', fallback)
 
 	def _yield_resources(self, attr_name, offline, minify=False):

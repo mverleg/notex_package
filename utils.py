@@ -18,6 +18,10 @@ class InvalidPackageConfigError(PackageError):
 	pass
 
 
+class IncorrectPackageBehaviourError(PackageError):
+	pass
+
+
 PACKAGE_NAME_INFO = 'Package names can consist of between 3 and 32 alphanumeric characters, starting with a letter.' + \
 	' They are case-insensitive and can contain "-_.," (not in sequence) which are all treated as "_".'
 

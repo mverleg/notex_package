@@ -60,15 +60,15 @@ def get_resources(*, group_name, path, logger, cache, compile_conf, template_con
 	if style_conf:
 		styles = expand(style_conf, cls=StyleResource, logger=logger)
 		for resource in styles:
-			assert resource.exists, 'style {0:} does not exist'.format(resource)
+			assert resource.exists, 'style {0:} does not exist at {1:s}'.format(resource, resource.full_file_path)
 	if script_conf:
 		scripts = expand(script_conf, cls=ScriptResource, logger=logger)
 		for resource in scripts:
-			assert resource.exists, 'scripts {0:} does not exist'.format(resource)
+			assert resource.exists, 'scripts {0:} does not exist at {1:s}'.format(resource, resource.full_file_path)
 	if static_conf:
 		static = expand(static_conf, cls=StaticResource, logger=logger)
 		for resource in static:
-			assert resource.exists, 'static {0:} does not exist'.format(resource)
+			assert resource.exists, 'static {0:} does not exist at {1:s}'.format(resource, resource.full_file_path)
 	return template, styles, scripts, static
 
 
@@ -76,7 +76,7 @@ def get_resources(*, group_name, path, logger, cache, compile_conf, template_con
 class Resource:
 	def __init__(self, logger, cache, compile_conf, group_name, resource_dir=None, *, local_path=None, remote_path=None,
 			allow_make_offline=True, download_archive=None, downloaded_path=None, copy_map=None, allow_minify=True,
-			tag_type=None, note=None):
+			tag_type=None, internalize=None, note=None):
 		"""
 		There are basically three options:
 
@@ -95,6 +95,8 @@ class Resource:
 		:param downloaded_path: Determines the local path to link after downloading the archive.
 		:param copy_map: A mapping from original to final file paths for either local or archive data. Can be used to copy extra files or set the location of the main archive file.
 		:param allow_minify: Allow (not guarantee) automatic minifying of resources (should be False if already minified; True by default).
+		:param tag_type: Value of the tag's `type` parameter (if not standard) for scripts and styles.
+		:param internalize: If `True`, put the file content inside the tag within the document, rather than linking it (the default `None` allows the compiler to choose).
 		:param note: A simple text note that may be included.
 		"""
 		self.logger = logger
@@ -133,6 +135,10 @@ class Resource:
 		self.allow_minify = allow_minify
 		self.processed_path = None
 		self.tag_type = tag_type
+		if internalize:
+			assert local_path or allow_make_offline, 'To internalize a resource, it must be available offline ' \
+				'(either `local_path` is set or `allow_make_offline` is `True`)'
+		self.internalize = internalize
 		self.notes = [note] if note else []  #['from package "{0:s}"'.format(self.package.name)]
 		# assert hasattr(local_copy, '__iter__') and not isinstance(local_copy, str), \
 		# 	'{0:}: local_copy should be a list'.format(self)
@@ -143,10 +149,6 @@ class Resource:
 		pth_str = ('"{0:s}" & "{1:s}"' if (self.local_path and self.remote_path) else '"{0:s}{1:s}"')\
 			.format((self.local_path or ''), (self.remote_path or ''))
 		return '{0:s} {2:s} {1:s}'.format(self.__class__.__name__, pth_str, self.group_name)
-
-	@property
-	def content(self):
-		raise NotImplementedError()
 
 	#todo: caching?
 	def make_offline(self):
@@ -210,6 +212,7 @@ class Resource:
 		Full path to where the local file, if set, can be loaded (so no GET parameters etc).
 		"""
 		if self.local_path:
+			assert self.resource_dir, 'cannot get file path for {0:s} since `resource_dir` is not set'.format(self)
 			return join(self.resource_dir, self.archive_dir or '', self.local_path)
 		return None
 
@@ -291,40 +294,86 @@ class Resource:
 			dst=self.processed_path, exist_ok=False, allow_overwrite=True)
 
 
-class HtmlResource(Resource):
+class LinkedResource(Resource):
+	def file_content(self):
+		"""
+		Get the content of a file if it is available locally (e.g. for internalizing).
+		"""
+		assert self.local_path, ('resource ({0:s}) must be local or have already been localized in order to get '
+			'file content').format(self)
+		with open(self.local_path, 'r') as fh:
+			return fh.read()
+
+
+class NonLinkedResource(Resource):
+	def __init__(self, logger, cache, compile_conf, group_name, resource_dir=None,
+			*, copy_map=None, tag_type=None, internalize=None, **kwargs):
+		"""
+		Check that no options are set that are irrelevant to NonLinkedResources.
+		"""
+		name = kwargs.get('local_path', None) or kwargs.get('remote_path', None) or \
+			kwargs.get('download_archive', None)
+		assert tag_type is None, ('static resource ({0:}) should not have `tag_type` ({1:})')\
+			.format(name, tag_type)
+		assert internalize is None, ('static resource ({0:}) should not set `internalize`').format(name)
+		assert not copy_map, ('static resources ({0:}) should not have other files copied along with them so '
+			'copy_map should be empty').format(name)
+		super(NonLinkedResource, self).__init__(logger=logger, cache=cache, compile_conf=compile_conf,
+			group_name=group_name, resource_dir=resource_dir, **kwargs)
+
+	def file_content(self):
+		raise NotImplementedError('resource `{0:s}` does not support getting file content')
+
+
+class HtmlResource(NonLinkedResource):
 	pass
 
 
-class StyleResource(Resource):
+class StyleResource(LinkedResource):
 	@property
 	def html(self):
+		"""
+		Get the html for this tag.
+		"""
 		tag_type = self.tag_type or 'text/css'
+		if self.internalize:#todo
+			return '<style rel="stylesheet" type="{1:s}" >{0:s}</style>'.format(self.file_content(), tag_type) + \
+				(' <!-- file content inserted; {0:s} -->'.format('; '.join(self.notes)) if self.notes else '')
 		return '<link href="{0:s}" rel="stylesheet" type="{1:s}" >'.format(self.relative_path, tag_type) + \
 			(' <!-- {0:s} -->'.format('; '.join(self.notes)) if self.notes else '')
 
 	def minify(self):
+		"""
+		Minimize the tag if possible (strip whitespace and things like that).
+		"""
 		def min_css(inpath, outpath):
 			process_single_css_file(css_file_path=inpath, output_path=outpath, overwrite=False)
 		return self._do_process(min_css, 'minify')
 
 
-class ScriptResource(Resource):
+class ScriptResource(LinkedResource):
 	@property
 	def html(self):
+		"""
+		Get the html for this tag.
+		"""
 		tag_type = self.tag_type or 'text/javascript'
+		if self.internalize:
+			return '<script type="{1:s}" >{0:s}</script>'.format(self.file_content(), self.tag_type) + \
+				(' <!-- file content inserted; {0:s} -->'.format('; '.join(self.notes)) if self.notes else '')
 		return '<script src="{0:s}" type="{1:s}"></script>'.format(self.relative_path, tag_type) + \
 			(' <!-- {0:s} -->'.format('; '.join(self.notes)) if self.notes else '')
 
 	def minify(self):
+		"""
+		Minimize the tag if possible (strip whitespace and things like that).
+		"""
 		def min_js(inpath, outpath):
 			process_single_js_file(js_file_path=inpath, output_path=outpath, overwrite=False)
 		return self._do_process(min_js, 'minify')
 
 
-class StaticResource(Resource):
-	def __init__(self, logger, cache, compile_conf, *, copy_map=None, **kwargs):
-		assert not copy_map, ('static resources ({0:}) should not have other files copied along with them so '
-			'copy_map should be empty').format(self)
-		super(StaticResource, self).__init__(logger=logger, cache=cache, compile_conf=compile_conf, ** kwargs)
+class StaticResource(NonLinkedResource):
+	pass
 
 

@@ -12,6 +12,7 @@ from shutil import rmtree
 from compiler.utils import hash_str, hash_file, import_obj, link_or_copy
 from notexp.bases import Configuration
 from notexp.utils import PackageNotInstalledError, InvalidPackageConfigError
+from frozen import frozen
 from .license import LICENSES
 from .resource import get_resources
 from .utils import get_package_dir
@@ -49,12 +50,13 @@ CONFIG_FUNCTIONAL = {'command_arguments', 'pre_processors', 'parser', 'tags', 'c
 
 
 class Package:
-	def __init__(self, name, version, options, logger, cache, compile_conf, *, packages_dir=None):
+	def __init__(self, name, version, options, logger, cache, compile_conf, *, packages=None, packages_dir=None):
 		self.loaded = False
 		self.name = name
 		self.logger = logger
 		self.cache = cache
 		self.compile_conf = compile_conf
+		self.packages = packages
 		if packages_dir is None:
 			packages_dir = get_package_dir()
 		self.packages_dir = packages_dir
@@ -192,10 +194,13 @@ class Package:
 		#todo: better errors, also logging
 		self._set_up_import_dir()
 		if conf['config']:
-			Config = self._import_from_package(conf['config'])
-			if Config is None:
+			Config = Configuration
+			if conf['config'] is True:
 				Config = Configuration
-			self.config = Config(self.options)
+			else:
+				Config = self._import_from_package(conf['config'])
+			self.config = Config(self.options, logger=frozen(self.logger), cache=frozen(self.cache),
+				compile_conf=frozen(self.compile_conf), parser=frozen(self.packages.get_parser()))
 		self.pre_processors = tuple(instantiate_action(self._import_from_package(obj_imp_path))
 			for obj_imp_path in conf['pre_processors'])
 		if conf['parser']:
