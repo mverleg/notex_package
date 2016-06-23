@@ -12,7 +12,7 @@ from shutil import rmtree
 from compiler.utils import hash_str, hash_file, import_obj, link_or_copy
 from notexp.bases import Configuration
 from notexp.utils import PackageNotInstalledError, InvalidPackageConfigError
-from frozen import frozen
+from frozenobj import frozen
 from .license import LICENSES
 from .resource import get_resources
 from .utils import get_package_dir
